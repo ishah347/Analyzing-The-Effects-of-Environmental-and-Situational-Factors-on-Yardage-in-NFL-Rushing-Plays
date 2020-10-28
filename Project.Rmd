@@ -1,0 +1,424 @@
+---
+title: "Stat 139 Final Project: Analyzing The Effects of Environmental and Situational Factors on Yardage in NFL Rushing Plays"
+author: "Andrew Chen, Micah Meekins, Chris Potvin, and Imran Shah"
+urlcolor: blue
+output: pdf_document
+---
+
+# Introduction
+
+Over the past several years, the NFL has grown increasingly interested in statistical analysis and big data, and how statistics can potentially affect how the game is watched and played. And, while they have now begun to collect game data, the NFL still has a shortage of statisticians to actually analyze it.  Due to this, the NFL conducts an annual Big Data Bowl, a competition open to the public, where the organization provides game statistics from previous years, and the group with the most accurate predictive model is awarded $75,000 dollars. This year’s Data Bowl revolves around the prediction of a rushing play’s expected yardage, given a multitude of variables such as, but not limited to, player, offensive formation, and weather. 
+
+The dataset from this study is found on the NFL’s Kaggle Big Data Bowl website (https://www.kaggle.com/c/nfl-big-data-bowl-2020/data). The dataset contains 23,171 observations of 49 variables, one for each player present in each rushing play from the 2017 and 2018 seasons. Unlike most sports that are played either inside or during warm seasons, football is in the unique position of being a primarily outside sport that also combats the harsh weather conditions that come with Fall and Winter. Potential snowfall or high windspeeds could completely alter how a football team plays the game. In general, the environment a game takes place in may affect a rushing play's yardage. For the purposes of this study, there are six intriguing predictors that may be derived from the dataset that can be deemed "environmental": the game's weather, the game's temperature (deg F), the game's humidity, the game's wind speed (in miles/hour), whether the game was played on turf or grass, and whether or not the offensive team has home-field advantage. 
+
+In addition to environmental factors, another interesting aspect to the NFL is how fluid the game is. For example, depending on the quarter, down, yards needed for a first down, yards needed for a touchdown, and current point difference between the offensive team and their opponent, a play could essentially already be decided before it is even run (and the defense could be ready for it). 
+Therefore, the goal of this analysis is to see if rushing plays are best predicted using constant factors (such as environmental factors that persist throughout the game), situational factors, or some combination of both. While situational factors are unknown before the onset of the game, constant factors such as weather can be accurately predicted days before, and therefore could be more assuredly used in pre-game preparations if the analysis deems the factors to be significant predictors. If it is indeed more relevant to use situational factors as predictors, much is revealed about the fluidity of a game and which situations lead to optimal and suboptimal rushing plays. 
+
+In order to accomplish this task, separate linear regression models will be run to infer feature significance as well as the strength of the models in explaining the variance in the yardage gained in a play. The first will use only constant factors to predict yardage. The second will only use fluid factors. And the third and subsequent models will build off the first two to try and create the best prediction model for rushing yardage using constant and/or fluid factors.
+
+# Hypothesis
+While no constant, environmental predictors will be significant, at least some of the situational factors will be better, significant predictors of rushing yardage. One reason for this expectation is that, for example, while weather is more likely to predict the frequency of rushing plays, as bad weather will likely limit the ability to pass the ball, players may be trained to be minimally affected by varying weather conditions. On the other hand, situational factors will be better suited to predict rushing outcomes because they are harder to prepare for, and so, have a larger impact on our response variable.
+
+```{r setup, include=FALSE}
+# Change defaults to make R code not be knitted into document
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Methods and EDA
+
+```{r}
+# Read in data
+data1 = read.csv("train.csv")
+```
+
+```{r}
+# Since we are only concerned with environmental predictors and
+# not with variables concerning the attributes of all the 
+# different players, we filter out all repeated observations 
+# with the same PlayId 
+data1 = data1[!duplicated(data1$PlayId),]
+
+# We simplify the Turf variable, which has factors "A-Turf Titan",
+# "Artifical", "Artificial", "DD GrassMaster", "Field turf", "Field Turf",
+# "FieldTurf", "FieldTurf 360", "FieldTurf360", "grass", "Grass",
+# "Natural", "natural grass", "Natural grass", "Natural Grass", "Naturall Grass",
+# "SISGrass", "Twenty-Four/Seven Turf", "UBU Speed Series-S5-M",
+# and "UBU Sports Speed S5-M", to just indicate whether or not
+# the play is done on artificial turf ("Yes") or on grass ("No")
+levels(data1$Turf) = c("Yes", "Yes", "Yes", "Yes", "Yes", 
+"Yes", "Yes", "Yes", "Yes", "No", "No", "No", "No", "No", 
+"No", "No", "Yes", "Yes", "Yes", "Yes") 
+data1$Turf = relevel(data1$Turf, ref = "No")
+
+# Many games have NA temperature values (i.e. they weren't recorded,
+# as indicated in the Appendix, as the NA indices occur in 
+# large groups of consecutive indices), 
+# and since that will be a predictor we use, we drop these observations
+data2 = data1[!is.na(data1$Temperature),]
+
+# As shown in the Appendix, there are cases where the values in
+# the WindSpeed and WindDirection columns are swapped, so we
+# fix this
+temp = data2$WindSpeed
+data2$WindSpeed[data2$WindDirection == "1" | 
+  data2$WindDirection == "13" | data2$WindDirection == "8"] =
+  data2$WindDirection[data2$WindDirection == "1" | 
+  data2$WindDirection == "13" | data2$WindDirection == "8"]
+data2$WindDirection[data2$WindDirection == "1" | 
+  data2$WindDirection == "13" | data2$WindDirection == "8"] =
+  temp[data2$WindDirection == "1" | 
+  data2$WindDirection == "13" | data2$WindDirection == "8"]
+
+# There are cases where WindSpeed and GameWeather don't
+# have the value NA, but rather, the value "". Looking at observations
+# where this occurs yields no obvious patterns, and so,
+# we assume these are meant to represent NA. Since these
+# will be predictors we use often, we will drop these observations
+data2 = data2[data2$WindSpeed != "" & data2$GameWeather != "",]
+data2$WindSpeed = droplevels(data2$WindSpeed)
+data2$GameWeather = droplevels(data2$GameWeather)
+
+# FieldPosition also has occurrences of "", but these do in fact
+# follow a pattern. Since these seem to only occur occasionally 
+# when the FieldPosition is the same as the previous play (i.e.
+# not enough yards were gained in the previous play to change
+# field position), this issue can be easily rectified
+for (i in 1:nrow(data2)) {
+  if (data2$FieldPosition[i] == "") {
+    data2$FieldPosition[i] = data2$FieldPosition[i-1]
+  }
+}
+
+# As seen in the Appendix, there are cases where the GameWeather
+# variable has value "Cold". This doesn't relate to the actual
+# weather, so we drop these observations
+data2 = data2[data2$GameWeather != "Cold",]
+data2$GameWeather = droplevels(data2$GameWeather)
+
+# As seen in the Appendix, GameWeather has many different levels
+# that we will condense into just 5: "Clear/Mostly Clear",
+# "Cloudy/Mostly Cloudy", "Fog", "Rain", and "Snow". The most
+# notable decisions we made is to treat "Indoors" weather as 
+# "Clear/Mostly Clear", since we will use that level to 
+# represent unnotable weather, and to treat cases where there's
+# a <50% chance of rain as "Cloudy/Mostly Cloudy", since
+# the GameWeather variable has a consistent value
+# throughout a game. Since this indicates that there wasn't a 
+# particularly high chance that it started raining at any point
+# in the game, we will treat these cases as "Cloudy/Mostly Cloudy".
+# Cases with higher probabilities will be treated as "Rain". 
+levels(data2$GameWeather) = c("Cloudy/Mostly Cloudy",
+"Clear/Mostly Clear", "Clear/Mostly Clear", "Clear/Mostly Clear", 
+"Clear/Mostly Clear", "Clear/Mostly Clear", "Clear/Mostly Clear", 
+"Clear/Mostly Clear", "Clear/Mostly Clear", "Cloudy/Mostly Cloudy", 
+"Cloudy/Mostly Cloudy", "Cloudy/Mostly Cloudy", "Cloudy/Mostly Cloudy", 
+"Rain", "Rain", "Cloudy/Mostly Cloudy", "Fog", "Snow", "Rain", "Cloudy/Mostly Cloudy", 
+"Clear/Mostly Clear", "Fog", "Snow", "Clear/Mostly Clear", 
+"Rain", "Cloudy/Mostly Cloudy", "Cloudy/Mostly Cloudy", "Cloudy/Mostly Cloudy", 
+"Clear/Mostly Clear", "Clear/Mostly Clear", "Clear/Mostly Clear", 
+"Cloudy/Mostly Cloudy", "Clear/Mostly Clear", "Cloudy/Mostly Cloudy", 
+"Cloudy/Mostly Cloudy", "Cloudy/Mostly Cloudy", "Clear/Mostly Clear", 
+"Clear/Mostly Clear", "Cloudy/Mostly Cloudy", "Rain", "Cloudy/Mostly Cloudy", 
+"Rain", "Rain", "Rain", "Rain", "Rain", "Snow", "Clear/Mostly Clear", 
+"Clear/Mostly Clear", "Clear/Mostly Clear", "Clear/Mostly Clear", 
+"Clear/Mostly Clear", "Clear/Mostly Clear", "Clear/Mostly Clear", 
+"Clear/Mostly Clear")
+data2$GameWeather = droplevels(data2$GameWeather)
+
+# WindSpeed, which we want to treat as a quantitative predictor,
+# has levels "0", "1", "10", "10-20", "10mph", "11", "11-17", "12", 
+# "12-22", "12mph", "13", "13 MPH", "14", "14-23", "15", 
+# "15 gusts up to 25", "16", "17", "18", "19", "2", "20", "22", 
+# "23", "24", "3", "4", "4 MPh", "5", "6", "6 mph", "7", "7 MPH",
+# "8", "9", and "Calm". While converting it to a quantitative variable,
+# we will treat "Calm" as 0 and will take the average value for 
+# the levels that are ranges
+levels(data2$WindSpeed) = c("0", "1", "10", "15", "10", "11", "14",
+"12", "17", "12", "13", "13", "14", "18.5", "15", "20", "16",
+"17", "18", "19", "2", "20", "22", "23", "24", "3", "4", "4",
+"5", "6", "6", "7", "7", "8", "9", "0")
+data2$WindSpeed = as.numeric(levels(data2$WindSpeed))[data2$WindSpeed]
+
+# Convert Down, Quarter, and Week to categorical variables 
+# because there's a limited amount of values they can take
+data2$Down = factor(data2$Down, levels = 1:4, 
+    labels=c("First","Second","Third","Fourth"))
+data2$Quarter = factor(data2$Quarter, levels = 1:5, 
+    labels=c("First","Second","Third","Fourth","Overtime"))
+data2$Week = factor(data2$Week)
+```
+
+```{r}
+# Create a predictor for whether or not the team with the ball
+# is the home team
+data2$AtHome = rep(0, nrow(data2))
+data2$AtHome[as.character(data2$PossessionTeam) == 
+                    as.character(data2$HomeTeamAbbr)] = 1
+data2$AtHome = factor(data2$AtHome, levels = 0:1,
+    labels=c("No","Yes"))
+```
+
+```{r}
+# Create predictors for which team is on offense (i.e. renaming
+# PossessionTeam to a more clear name) and which
+# team is on defense
+data2$Offense = data2$PossessionTeam
+data2$Defense = data2$HomeTeamAbbr
+
+for (i in 1:nrow(data2)) {
+  if (data2$AtHome[i] == "Yes") {
+    data2$Defense[i] = data2$VisitorTeamAbbr[i]
+  }
+}
+```
+
+```{r}
+# Create a predictor for the point difference between the possessing
+# team and their opponent
+data2$PointDifference = data2$HomeScoreBeforePlay - 
+  data2$VisitorScoreBeforePlay
+data2$PointDifference[data2$AtHome == "No"] = 
+  data2$PointDifference[data2$AtHome == "No"] * -1
+```
+
+```{r}
+# Create a predictor for the number of yards the possessing team
+# needs to advance to score a touchdown
+data2$DistToTouchdown = data2$YardLine
+data2$DistToTouchdown[as.character(data2$PossessionTeam) == 
+                    as.character(data2$FieldPosition)] = 
+  100-data2$DistToTouchdown[as.character(data2$PossessionTeam)
+  == as.character(data2$FieldPosition)]
+```
+
+Because our data set was large and based on input from various NFL teams, the data contained many NA values, incorrectly inputted data, different string values for factors that represented similar things, and other inaccuracies that had the possibility of skewing our results. Therefore, our first step in our analysis of the data was to clean the data in order to ensure that we had the purest and most efficient data possible. Because this analysis does not take into account the individual attributes of players involved in each play and because the factors we *are* interested in are contained within each of the 22 observations for each play (one for every player involved), we only kept one observation per play by removing any data points with duplicate Play IDs. A few significant alterations to the data set bear mentioning. Many of the observations are missing temperature, wind speed, and weather values (in the given **Temperature**, **WindSpeed**, and **GameWeather** variables, respectively), likely due to them not being manually input with the rest of the data or not recorded at the given game, so we removed all such observations. There were 20 different values for the given **Turf** variable, one for every possible type of surface a game was played on, so to simplify the variable we changed the variable to a "Yes" or "No" binary variable representing whether the turf was artificial or real grass. We also reduced **GameWeather**, which originally had many specific values such as "Heavy lake effect snow" and many values with identical meanings, into five categories, “Clear/Mostly Clear", "Cloudy/Mostly Cloudy", "Fog", "Rain", and "Snow" and sorted the data observation into one of these categories and reduced **WindSpeed**, originally given as a categorical variable with some values representing ranges of wind speeds in a game, into a quantitative variable, averaging over the range to acquire our value if there was a need to.
+
+The variables we are concerned with are our response variable **Yards**, the yardage gained on the play, and our environmental/constant predictors **GameWeather** with "Cloudy/Mostly Cloudy" as the reference group, **Temperature**, **WindSpeed**, **Turf**, **Humidity** (the humidity of the game), and **AtHome** (an indicator for whether or not the offensive team has home-field advantage), and our fluid/situational predictors **Quarter** (a categorical variable representing which quarter the game is in) with the first quarter as the reference group, **Down** (a categorical variable representing the current down) with the first down as the reference group, **Distance** (yards needed for a first down before the play), **PointDifference** (point difference between offensive team and their opponent before the play), and **DistToTouchdown** (yards needed to score a touchdown before the play).
+
+```{r}
+# Check the distributions of the quantitative, nonbinary,
+# variables that we will be using 
+quants = data.frame(data2$Yards, data2$Temperature, 
+data2$Humidity, data2$WindSpeed, data2$PointDifference, 
+data2$DistToTouchdown)
+colnames(quants) = c("Yards", "Temperature", "Humidity", 
+        "WindSpeed", "PointDifference", "DistToTouchdown")
+quants.scaled = apply(quants, 2 , scale)
+boxplot(quants.scaled, cex.axis=0.5, las=2)
+
+# The only variable that is heavily skewed is Yards, and it's
+# right-skewed. However, it does still have a 
+# significant left-tail, so it's not too problematic. Additionally, 
+# since we cannot use the log transformation since there are negative
+# values in the Yards column of our data, keeping the variable
+# as is is best for interpretability.
+```
+
+```{r}
+# Our base model will account for the potential 
+# dependencies among the observations in the dataset. We unfortunately
+# just have two years of data, 2017 and 2018, and so, it 
+# behooves us to not group by year and pool our observations together.
+# Since it is most likely that no team drastically changed between
+# these years, our independence assumption should be fine.
+# Since our number of 
+# observations is large (19,205) and since each grouping in these
+# predictors has a significant amount of observations,
+# we will include the three most important grouping variables
+# Offense and Defense (i.e. which team is trying to score against
+# which team) and Week (i.e. when in the season the play is happening)
+# as fixed effects rather than attempting mixed-effect modelling.
+model.base = lm(Yards ~ Offense + Defense + Week, data = data2) 
+```
+
+```{r}
+# We start by creating two models using our base model, 
+# one in which we added predictors that remain (mostly) 
+# constant throughout a game and one in which we added predictors
+# that change frequently, to see the former
+# predictors, the latter predictors, or some combination
+# are most effective at predicting Yards
+model.game_constant = lm(Yards ~ Offense + Defense + Week + 
+    GameWeather + Temperature + 
+    Humidity + WindSpeed + Turf + AtHome, data = data2)
+
+model.game_fluid = lm(Yards ~ Offense + Defense + Week + 
+    Quarter + Down + Distance + PointDifference + 
+    DistToTouchdown, data = data2)
+```
+
+```{r}
+# Based on an analysis of the previous models found in the Results section
+# (overall F-tests, etc.), we can create a model using all the
+# relevant predictors from the previous model
+model.best = lm(Yards ~ Offense + Defense + Week + 
+    Quarter + Down + Distance + 
+    DistToTouchdown, data = data2)
+```
+
+```{r}
+# If there are any quantitative predictors in this "best" model,
+# we can try adding their quadratic terms to see if that adds
+# significant additional explanatory power
+model.best_poly = lm(Yards ~ Offense + Defense + Week + 
+    Quarter + Down + poly(Distance,2,raw=T) + 
+    poly(DistToTouchdown,2,raw=T), data = data2)
+```
+
+Checking the distributions of the relevant quantitative, nonbinary variables, only the **Yards** variable is heavily skewed (right-skewed), but since there still is a significant left-tail, meaning that this non-normality will not be too damaging to our assumptions of linear regression, and since there are negative values for the **Yards** variable, preventing us from using a logarithmic transformation, the most interpretable transformation, we have chosen to keep the variable as is for better interpretability. Since there may be dependencies among the observations since observations with the same offensive team may not be independent, observations with the same defensive team may not be independent, and observations within the same week of the season may not be independent, our base model for predicting **Yards**, **model.base**, is a standard multiple regression containing grouping variables, **Offense** (with the Arizona Cardinals as the reference group), **Defense** (with the Arizona Cardinals as the reference group), and **Week** (with Week 1 as the reference group), that account for those possible dependencies. Since we wish to use our models to predict **Yards** in future games in future years, it behooves us not to group by game or by year. Thus, for the sake of inference, we assume rushings plays in the same game are independent and rushing plays in the same year are independent (a strong assumption, and an admitted flaw of our models). We then created two new models from our base model. We created a "game-constant" model containing the variables from the base model as well as **GameWeather**, **Temperature**, **Humidity**, **WindSpeed**, **Turf**, and **AtHome** called **model.game_constant**. This "game-constant" model represents the effects of the factors of the game that (relatively) remain the same throughout the entirety of the game on a rushing play's yardage. The second model is the "game-fluid" model containing the variables from the base model as well as **Quarter**, **Down**, **Distance**, **PointDifference**, and **DistToTouchdown** called **model.game_fluid**. This model represents the effects of the factors of the game that are frequently changing on a rushing play's yardage. Based on an analysis of the previous models explained in the **Results** section using features such as predictors' p-values to determine significance, we create a multiple regression model with the significant constant and fluid predictors, as well as our grouping variables, called **model.best** and use that model for further analysis. We then took this version of our model and included quadratic terms for each of the quantitative predictors to evaluate whether they would strengthen the model using an ESS F-test, resulting in a model called **model.best_poly**.
+
+# Results
+<!-- For part of the results, you can spend some time doing the econometrics thing. Use all our models to estimate Yards for one or two example situations, and use all our models and keep one predictor as a variable while using certain fixed values for the other predictors (i.e. pick two teams in a certain week, and use the mode/mean of the other predictors) to see how Yards varies as that variable changes. Make sure to make graphs and stuff too. -->
+The full summary outputs for the models can be found in Section 2 of the Appendix. Below, we will discuss the relevant results for each of the models in turn, then briefly describe our broad findings.
+
+## Model Results
+
+### Baseline Model
+As previously mentioned, the purpose of our baseline model is to be a barometer that accounts for potential dependencies among the observations of the data so that when we later construct augmented models, we can test whether these augmentations are significant. Thus, we would like to see how well our baseline model does at describing the data at hand.
+
+First of all, we note that the $R^2$ value is extremely small ($0.005127$). This is to be expected given that the model attempts to predict the yards of a particular rushing attempt solely through the teams involved and the week of the game. We also have the following plots which provide some intuition into the fit of the model.
+```{r, echo=F}
+  par(mfrow=c(1, 2))
+  plot(model.base, which=c(1, 2))
+```
+
+From the lefthand plot, we can see that the majority of the observations have a roughly linear relationship with the predictors but there are a number of outliers that occur across all fitted values. This is further demonstrated in the right-hand plot where there appears to be an extremely large right-tail in the residuals and a smaller but still large left-tail as well. This type of distribution is to be expected given the nature of football, since players can simply give up on the play in order to limit large rushing losses to the downside. Again, the fit in the tails is to be expected given that the granularity of predictors used. 
+
+Finally, examining the summary output we can see that the magnitudes of the intercepts and coefficients make sense. There are a number of significant predictors but for the purposes of the baseline model which predictors are significant is not relevant.
+
+Overall we can see that our model manages to describe the relevant dependencies in the data that may occur across team offense, defense, and time. Teams with better rushing offenses by other traditional metrics have larger offensive coefficients (such as LAR and KC), and the same holds for teams with better rushing defenses (NO, TEN).
+
+### Constant Predictor Model
+The $R^2$ of the constant predictor model is $0.00546$, which represents a small improvement over the baseline model. The smallness of the value aligns with our hypothesis, given that adding constant predictors to our baseline model does not offer significant improvement in our model's ability to explain the variance in the **Yard** variable. We would like to see if any of these predictors are statistically significant.
+
+Below we have a table of the additional predictors included in the constant predictor model.
+
+```{r, echo=F}
+  print(summary(model.game_constant)$coefficients[80:88, ], digits=3)
+```
+
+We can see that the sign of some of these coefficients matches our intuition. For example, in the weather category we have that clear weather increases rushing yards, while adverse conditions such as rain, fog, and snow decrease rushing yards. Others are more perplexing, with rushes at home potentially performing worse than rushes away, and increasing windspeeds affecting rushing yards negatively. We will return to these further in our conclusion.
+
+Overall, we can see that at the $\alpha=0.05$ level, none of the predictors are statistically significant, again aligning with our original hypothesis. 
+
+### Fluid Predictor Model
+The $R^2$ value of the fluid predictor model is $0.01793$, which represents a large improvement over the baseline. However, we note that our model still explains less than 2\% of the variance in the **Yards** variable. Below we list a table of the additional predictors included in the fluid predictor model.
+
+```{r, echo=F}
+  print(summary(model.game_fluid)$coefficients[80:89, ], digits=3)
+```
+
+At the $\alpha=0.05$ level, the significant predictors are **QuarterSecond** and **QuarterOvertime** (i.e. **Quarter** as a whole), **DownThird** (i.e. **Down** as a whole), **Distance**, and **DistToTouchdown**. Aligning with our hypothesis, all but one (**PointDifference**) of the fluid predictors are significant predictors of a rushing play's yardage.
+
+### Combined Model
+Our combined model is created by taking the significant predictors from the constant and fluid predictor models. Since there were no significant predictors from the constant predictor model, we end up with a combined model that looks very similar to our fluid predictor model. The $R^2$ value is $0.01793$, which again is a large improvement over the baseline. The table of additional predictors included is as follows:
+
+```{r, echo=F}
+  print(summary(model.best)$coefficients[80:88, ], digits=3)
+```
+
+The significant predictors here are again **QuarterSecond**, **QuarterOvertime**, **DownThird**, **Distance**, and **DistToTouchdown**.
+
+### Quadratic Combined Model
+In the quadratic combined model, we use the same predictors as the combined model but also include quadratic terms of the quantitative factors. This gives us an $R^2$ value of $0.02149$, which is a large improvement over the simple combined model; however, this model still does not explain a large amount of the variance in the **Yards** variable. The table of predictors is listed below.
+
+```{r, echo=F}
+  print(summary(model.best_poly)$coefficients[80:90, ], digits=3)
+```
+
+At the $\alpha=0.05$ level, we have that **QuarterSecond**, **DownThird**, **Distance** (linear and quadratic), and **DistToTouchdown** (linear and quadratic) are all significant. This leads us to conclude that the quadratic terms should indeed be included in our model, a notion supported by an ESS F-test using **model.best_poly** and **model.best** performed in the **Appendix**, which yields a p-value of 8.403e-16, which is very significant and supports keeping the quadratic terms in the model.
+
+To see this model in action, let's take, for example, a game between the New England Patriots and the New York Giants in Week 7 of a future season, where the former team has posession and is going to rush in the second quarter on a second down when they are 5 yards from a first down and 50 yards from a touchdown. As seen in the Appendix, the intercept for **model.best_poly** is -3.066e-01, the coefficient of **OffenseNE** is 1.213e+00, the coefficient of **DefenseNYG** is 1.608e-01, and the coefficient of **Week7** is 1.710e-01. Thus, our predicted yardage for this play is $-3.066e-01 + 1.213e+00 + 1.608e-01 + 1.710e-01 + 0.39171 + 0.20189 + 0.16900(5) - 0.00396(5)^2 + 0.07604(50) - 0.00058(50)^2 =  4.9298$.
+
+# Conclusion
+
+## Discussion
+We first note a few overarching observations. As we noted during the data cleaning process, the **Yards** variable has an extremely long right-tail and a non-trivial left-tail as well. This became evident during our analysis since the residuals of our baseline model appeared to have long tails on both sides as well even though we were capturing some dependent effects within the data. As a result, our $R^2$ values across all models is low in magnitude.
+
+As discussed in the previous section, the inclusion of constant predictors such as environmental factors did not meaningfully affect model quality, and none of the included predictors were statistically significant. By contrast, the inclusion of fluid predictors did affect model quality and also did produce statistically significant predictors. This resulted in our later combined models being dominated by fluid predictors rather than constant predictors.
+
+The quadratic combined model captures some interesting effects of these fluid predictors. The quadratic effects are indeed statistically significant. We will return to the intuition behind these in the next section.
+
+Overall, our hypothesis was that constant predictors such as environmental factors would not have a statistically significant contribution to rushing yards while fluid predictors would. Based on the above results we can see that fluid predictors are indeed more relevant in predicting rushing yards.
+
+## Intuitions
+
+Below we will discuss some insights derived from our analysis of constant and fluid predictors.
+
+### Constant Predictors
+
+In the discussion of our constant predictor model, we note that some of the predictors had interesting coefficients. Namely, as windspeed increases rushing yardage decreases and being at home decreases rushing yardage as well.
+
+At first glance, the former is interesting because we wouldn't necessarily expect windspeed to negatively affect, or affect at all, the rushing game. However, the negative coefficient can be explained by our not taking into account the direction of the wind in each rushing play. While we would expect the amount of times wind pushes against the offense and the amount of times wind pushes against the defense to be roughly equal, it is possible that in our data set there were more occasions of the wind working against the rushing offense. In future work it would likely be pertinent to account for wind direction for this reason.
+
+Again, at first glance the latter is interesting because we would expect being at home to improve rushing games. However, we can explain the negative coefficient by noting that the disadvantage in playing away comes from communication which more adversely affects the passing game. This suggests that playing at home disproportionately improves the passing game, which comes to the detriment of the rushing game. Again, this is an intuitive explanation but should be verified in future work.
+
+### Fluid Predictors
+In the quadratic combined model, we see a few interesting results worth discussing. 
+
+First, we note that the second quarter coefficient remains significant and positive. This is surprising because any explanations involving the end-of-half should also manifest in the end-of-game scenario. One possible explanation is that at the end-of-half, teams are not facing an imminent win/loss situation and thus are able to maintain a balanced rushing and passing attack, while at end-of-game, teams that are down often resort solely to passing and not rushing, leading to the insignificance of **QuarterFourth**. This is a point that would be interesting to investigate in future work.
+
+Fourth downs not having a significant coefficient make sense given that fourth down is traditionally a passing or punting down. Note that performing above average is not the relevant heuristic to football teams here, but rather whether the rushing attempt converted into a first down.
+
+The quadratic nature of down distance and distance to touchdown appear to follow the same intuition, that on longer distances for both, opposing defenses will be expecting more passing rather than rushing and thus rushing will overperform since it is less likely to convert. At a certain point, however, the probability of converting or scoring on that particular play is so low that defenses optimize for yardage (for field position) and begin defending rushes again. This results in the dual quadratic and significant combination seen in these two predictors.
+
+## Challenges in the Data
+In addition to the challenges already mentioned in the **Methods and EDA** section, such as many missing values, another issue was the reporting of the stadium type (outdoors, indoors with open roof, indoors with closed roof, etc.) in the dataset. We would have liked to have gotten detailed information regarding this, since the insignificance of the predictors concerning weather, temperature, and humidity could be explained by those factors not mattering in many cases where the stadium was closed off to the outside world. However, the dataset rarely supplied information regarding whether or not an indoor stadium had an open or closed roof for a game, and so, we were unable to take this into account.
+
+## Limitations
+As previously mentioned, our model is limited by the nature of the data in that the yards variable has very long tails on both sides. This means that our $R^2$ values are depressed. Additionally, football is naturally a high-variance game with teams often only rushing the ball $25$ times per game out of a plethora of different formations and with a variety of different personnel. Attempting to control for these variables is difficult and also results in sample-size issues. The fact that our dataset only includes rushing plays could also be seen as a limitation, since this makes it difficult to conclude recommendations for teams. For example, while we can conclude that rushing on a third down is significantly better than rushing on a first down, we couldn't recommend that a team rush on a third down since that may be inferior to passing on a third down in terms of yardage.  
+
+## Next Steps
+We can extend our base analysis by addressing the concerns presented in the previous Limitations section. It is possible that after controlling for many of these dynamic effects, environmental factors again become relevant in the rushing game. Additionally, acquiring data regarding passing plays should help us make relevant recommendations.
+
+Similarly, we can also work on complementary analysis that brings data to the explanations described in the Intuitions section. Overall we would like to investigate whether the data supports our proposed hypotheses in situations where there are many competing intuitive effects.
+
+# Appendix
+
+## Section 1: Verification of Issues for Data Cleaning
+
+```{r, echo=T}
+# Demonstrates that the NA's in the Temperature column occur in
+# groups of consecutive indices
+which(is.na(data1$Temperature))
+```
+
+```{r, echo=T}
+# Demonstrate that there are cases where WindSpeed and WindDirection
+# were mixed up while inputting data
+unique(data1$WindSpeed[data1$WindDirection == "1" | 
+  data1$WindDirection == "13" | data1$WindDirection == "8"])
+```
+
+```{r, echo=T}
+# We dropped the odd weathers like "" and "T: 51; H: 55; W: NW 10 mph"
+# and condensed the number of levels
+table(data1$GameWeather)
+```
+
+## Section 2: Model Summaries
+```{r, echo=T}
+summary(model.base)
+```
+
+```{r, echo=T}
+summary(model.game_constant)
+```
+
+```{r, echo=T}
+summary(model.game_fluid)
+```
+
+```{r}
+summary(model.best)
+```
+
+```{r}
+summary(model.best_poly)
+```
+
+```{r}
+# Based on p-values, the quadratic terms are significant predictors.
+# We use the ESS F-test to confirm if this is true
+anova(model.best_poly, model.best)
+```
