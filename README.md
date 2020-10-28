@@ -1,6 +1,6 @@
 # Analyzing-The-Effects-of-Environmental-and-Situational-Factors-on-Yardage-in-NFL-Rushing-Plays
 
-Introduction
+**Introduction**
 
 Over the past several years, the NFL has grown increasingly interested in statistical analysis and big data, and
 how statistics can potentially affect how the game is watched and played. And, while they have now begun
